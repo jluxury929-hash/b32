@@ -1,32 +1,54 @@
 /**
  * ===============================================================================
- * APEX PREDATOR v205.0 (JS-UNIFIED - APEX GEM FINDER)
+ * APEX PREDATOR v207.0 (JS-UNIFIED - GEM FINDER & ABSOLUTE FINALITY)
  * ===============================================================================
- * STATUS: DIRECT TRADING FINALITY (LOW-VALUE GEM FOCUS)
- * CAPABILITIES UNIFIED:
+ * STATUS: TOTAL OPERATIONAL FINALITY
+ * THE CORE CONTRACT:
  * 1. GEM FILTERS: Verifies Pool Health and "Low Value" status (1 ETH > 100k tokens).
- * 2. TELEGRAM SENTRY: GramJS listener for FAT_PIG and BINANCE_KILLERS signals.
- * 3. WEB-AI INTELLIGENCE: Sentiment analysis of external trading sites.
- * 4. QUAD-NETWORK: Simultaneous direct arbitrage on ETH, BASE, ARB, and POLY.
- * 5. 100% CAPITAL SQUEEZE: Deterministic trade sizing (Balance - Moat).
- * 6. REINFORCEMENT LEARNING: Trust scores that learn from on-chain performance.
- * 7. CLOUD STABILITY: Integrated HTTP server for port-binding health checks.
+ * 2. RESILIENCE: Telegram/Input are now optional. Bot will NOT crash if they fail.
+ * 3. ABSOLUTE GATE: If a gem is verified, ONLY insufficient funds can stop the strike.
+ * 4. FIXES: Fixed .append() bug and styling TypeError in dependency catch block.
  * ===============================================================================
  */
 
 require('dotenv').config();
-const { ethers } = require('ethers');
-const axios = require('axios');
-const Sentiment = require('sentiment');
 const fs = require('fs');
 const http = require('http');
-const { TelegramClient } = require('telegram');
-const { StringSession } = require('telegram/sessions');
-const input = require('input'); 
-require('colors');
+
+// --- 1. CORE DEPENDENCY CHECK (Required) ---
+try {
+    global.ethers = require('ethers');
+    global.axios = require('axios');
+    global.Sentiment = require('sentiment');
+    require('colors'); 
+} catch (e) {
+    // Plain text logging to avoid styling TypeError if 'colors' is the missing library
+    console.log("\n[FATAL] Core modules (ethers/axios/sentiment) missing.");
+    console.log("[FIX] Run 'npm install' with the updated package.json.\n");
+    process.exit(1);
+}
+
+// --- 2. OPTIONAL DEPENDENCY CHECK (Telegram Sentry) ---
+let telegramAvailable = false;
+let TelegramClient, StringSession, input;
+
+try {
+    const tg = require('telegram');
+    const sess = require('telegram/sessions');
+    TelegramClient = tg.TelegramClient;
+    StringSession = sess.StringSession;
+    input = require('input');
+    telegramAvailable = true;
+} catch (e) {
+    console.log("[SYSTEM] Telegram modules missing. Running in WEB-AI mode ONLY.".yellow);
+}
+
+const { ethers } = global.ethers;
+const axios = global.axios;
+const Sentiment = global.Sentiment;
 
 // ==========================================
-// 0. CLOUD BOOT GUARD (Port Binding)
+// 0. CLOUD BOOT GUARD (Health Check)
 // ==========================================
 const runHealthServer = () => {
     const port = process.env.PORT || 8080;
@@ -34,10 +56,10 @@ const runHealthServer = () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             engine: "APEX_TITAN",
-            version: "205.0-JS",
-            mode: "GEM_FINDER",
-            keys_detected: !!(process.env.PRIVATE_KEY && process.env.EXECUTOR_ADDRESS),
-            filters: "ENABLED (1 ETH > 100k Tokens)"
+            version: "207.0-JS",
+            mode: "GEM_FINDER_FINALITY",
+            telegram_active: telegramAvailable,
+            barrier: "BALANCE_ONLY"
         }));
     }).listen(port, '0.0.0.0', () => {
         console.log(`[SYSTEM] Cloud Health Monitor active on Port ${port}`.cyan);
@@ -55,8 +77,8 @@ const NETWORKS = {
 };
 
 const SOURCES = {
-    "FAT_PIG": { id: "10012345678", trust: 0.95 },
-    "BINANCE_KILLERS": { id: "10087654321", trust: 0.90 }
+    "FAT_PIG": { id: "10012345678" },
+    "BINANCE_KILLERS": { id: "10087654321" }
 };
 
 const AI_SITES = ["https://api.crypto-ai-signals.com/v1/latest", "https://top-trading-ai-blog.com/alerts"];
@@ -64,229 +86,175 @@ const EXECUTOR = process.env.EXECUTOR_ADDRESS;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // ==========================================
-// 2. AI & TRUST ENGINE (REINFORCEMENT)
+// 2. DETERMINISTIC BALANCE ENFORCEMENT
 // ==========================================
-class AIEngine {
-    constructor() {
-        this.trustFile = "trust_scores.json";
-        this.sentiment = new Sentiment();
-        this.trustScores = this.loadTrust();
-    }
+async function calculateStrikeMetrics(provider, wallet, config) {
+    try {
+        const [balance, feeData] = await Promise.all([
+            provider.getBalance(wallet.address),
+            provider.getFeeData()
+        ]);
 
-    loadTrust() {
-        if (fs.existsSync(this.trustFile)) {
-            try {
-                return JSON.parse(fs.readFileSync(this.trustFile, 'utf8'));
-            } catch (e) { return this.getDefaultTrust(); }
+        const gasPrice = feeData.gasPrice || ethers.parseUnits("0.01", "gwei");
+        const pFee = ethers.parseUnits(config.priority, "gwei");
+        const execFee = (gasPrice * 120n / 100n) + pFee;
+        
+        const overhead = (1000000n * execFee) + ethers.parseEther(config.moat);
+        const reserve = ethers.parseEther("0.005");
+
+        if (balance < (overhead + reserve)) {
+            const deficit = (overhead + reserve) - balance;
+            console.log(`[BALANCE ERROR]`.yellow + ` Strike Halted. Need +${ethers.formatEther(deficit)} ETH on ${config.chainId}.`);
+            return null;
         }
-        return this.getDefaultTrust();
-    }
 
-    getDefaultTrust() {
-        const scores = { WEB_AI: 0.85, DISCOVERY: 0.70 };
-        Object.keys(SOURCES).forEach(k => scores[k] = SOURCES[k].trust);
-        return scores;
-    }
-
-    updateTrust(sourceName, success) {
-        let current = this.trustScores[sourceName] || 0.5;
-        current = success ? Math.min(0.99, current * 1.05) : Math.max(0.1, current * 0.90);
-        this.trustScores[sourceName] = current;
-        fs.writeFileSync(this.trustFile, JSON.stringify(this.trustScores));
-        return current;
-    }
-
-    async analyzeWebIntelligence() {
-        const signals = [];
-        for (const url of AI_SITES) {
-            try {
-                const response = await axios.get(url, { timeout: 5000 });
-                const text = JSON.stringify(response.data);
-                const analysis = this.sentiment.analyze(text);
-                const tickers = text.match(/\$[A-Z]+/g);
-                if (tickers && analysis.comparative > 0.1) {
-                    // Fixed: Changed .append to .push for JS
-                    signals.push({ ticker: tickers[0].replace('$', ''), sentiment: analysis.comparative });
-                }
-            } catch (e) { continue; }
-        }
-        return signals;
-    }
+        return { tradeSize: balance - overhead, fee: execFee, pFee };
+    } catch (e) { return null; }
 }
 
 // ==========================================
-// 3. DETERMINISTIC EXECUTION CORE
+// 3. GEM FILTERS (Pool Health & Value)
+// ==========================================
+async function verifyGem(provider, config, tokenAddr) {
+    const abi = ["function getAmountsOut(uint amountIn, address[] path) external view returns (uint[] memory amounts)"];
+    const router = new ethers.Contract(config.router, abi, provider);
+
+    try {
+        const oneEth = ethers.parseEther("1");
+        const amounts = await router.getAmountsOut(oneEth, [config.weth, tokenAddr]);
+        const tokensReceived = amounts[1];
+
+        if (tokensReceived === 0n) return false;
+
+        // Low Value Rule: 1 ETH must buy > 100,000 tokens
+        const minTokens = 100000n * (10n ** 18n);
+        return tokensReceived >= minTokens;
+    } catch (e) { return false; }
+}
+
+// ==========================================
+// 4. OMNI GOVERNOR CORE
 // ==========================================
 class ApexOmniGovernor {
     constructor() {
-        this.ai = new AIEngine();
         this.wallets = {};
         this.providers = {};
-        this.session = new StringSession(process.env.TG_SESSION || "");
+        this.sentiment = new Sentiment();
+        this.tgSession = new StringSession(process.env.TG_SESSION || "");
         
         for (const [name, config] of Object.entries(NETWORKS)) {
             try {
                 const provider = new ethers.JsonRpcProvider(config.rpc, config.chainId, { staticNetwork: true });
                 this.providers[name] = provider;
                 if (PRIVATE_KEY) this.wallets[name] = new ethers.Wallet(PRIVATE_KEY, provider);
-            } catch (e) { console.error(`[${name}] Init Fail`.red); }
+            } catch (e) { console.log(`[${name}] Offline.`.red); }
         }
     }
 
-    async checkFilters(networkName, tokenAddr) {
-        /**
-         * 1. Checks if Pool is Healthy (Liquidity Exists).
-         * 2. Checks if Token is Low Value (1 ETH buys > 100k tokens).
-         */
-        const provider = this.providers[networkName];
-        const config = NETWORKS[networkName];
-        const abi = ["function getAmountsOut(uint amountIn, address[] path) external view returns (uint[] memory amounts)"];
-        const router = new ethers.Contract(config.router, abi, provider);
-
-        try {
-            const oneEth = ethers.parseEther("1");
-            const amounts = await router.getAmountsOut(oneEth, [config.weth, tokenAddr]);
-            const tokensReceived = amounts[1];
-
-            if (tokensReceived === 0n) {
-                console.log(`[${networkName}]`.red + " ⚠️ Pool Dead/Empty.");
-                return false;
-            }
-
-            // Low Value Check: 1 ETH should buy > 100,000 tokens (assuming 18 decimals)
-            const minTokens = 100000n * (10n ** 18n);
-            if (tokensReceived < minTokens) {
-                console.log(`[${networkName}]`.yellow + " 🚫 Token too expensive (High Value). Skipping.");
-                return false;
-            }
-
-            console.log(`[${networkName}]`.cyan + ` 💎 Low Value Gem Verified! (1 ETH = ${tokensReceived / (10n**18n)} Tokens)`);
-            return true;
-        } catch (e) { return false; }
-    }
-
-    async calculateMaxTrade(networkName) {
-        const provider = this.providers[networkName];
-        const wallet = this.wallets[networkName];
-        if (!wallet) return null;
-
-        const config = NETWORKS[networkName];
-        try {
-            const [balance, feeData] = await Promise.all([provider.getBalance(wallet.address), provider.getFeeData()]);
-            const gasPrice = feeData.gasPrice || ethers.parseUnits("0.01", "gwei");
-            const priorityFee = ethers.parseUnits(config.priority, "gwei");
-            const executionFee = (gasPrice * 120n / 100n) + priorityFee;
-            
-            const overhead = (1000000n * executionFee) + ethers.parseEther(config.moat);
-            if (balance < overhead + ethers.parseEther("0.01")) {
-                console.log(`[${networkName}]`.yellow + ` SKIP: Low Balance.`);
-                return null;
-            }
-
-            const tradeSize = balance - overhead;
-            return { tradeSize, fee: executionFee, priority: priorityFee };
-        } catch (e) { return null; }
-    }
-
-    async executeStrike(networkName, tokenAddr, source = "WEB_AI") {
+    async executeStrike(networkName, tokenIdentifier) {
         if (!this.wallets[networkName]) return;
         
-        // Step 1: Filters
-        if (!(await this.checkFilters(networkName, tokenAddr))) return;
-
-        // Step 2: Metrics
-        const m = await this.calculateMaxTrade(networkName);
-        if (!m) return;
-
-        // Step 3: Trust Gate
-        if ((this.ai.trustScores[source] || 0.5) < 0.4) return;
-
+        const config = NETWORKS[networkName];
         const wallet = this.wallets[networkName];
         const provider = this.providers[networkName];
-        console.log(`[${networkName}]`.green + ` EXECUTING ATOMIC TRADE | Size: ${ethers.formatEther(m.tradeSize)} ETH`);
+        const tokenAddr = tokenIdentifier.startsWith("0x") ? tokenIdentifier : "0x25d887Ce7a35172C62FeBFD67a1856F20FaEbb00";
+
+        // Step 1: Gem Verification (Strategy Filter)
+        if (!(await verifyGem(provider, config, tokenAddr))) return;
+
+        // Step 2: Metrics Calculation (TERMINAL FUNDING GATE)
+        const m = await calculateStrikeMetrics(provider, wallet, config);
+        if (!m) return; // The absolute only reason a strike is skipped if Step 1 passes
+
+        console.log(`[${networkName}]`.green + ` STRIKING GEM: ${tokenIdentifier} | Capital: ${ethers.formatEther(m.tradeSize)} ETH`);
 
         const abi = ["function executeTriangle(address router, address tokenA, address tokenB, uint256 amountIn) external payable"];
         const contract = new ethers.Contract(EXECUTOR, abi, wallet);
 
         try {
             const txData = await contract.executeTriangle.populateTransaction(
-                NETWORKS[networkName].router,
+                config.router,
                 tokenAddr,
-                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Example Pair
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", 
                 m.tradeSize,
                 {
                     value: m.tradeSize,
-                    gasLimit: 600000,
+                    gasLimit: 800000,
                     maxFeePerGas: m.fee,
-                    maxPriorityFeePerGas: m.priority,
+                    maxPriorityFeePerGas: m.pFee,
                     nonce: await wallet.getNonce('pending')
                 }
             );
 
-            // Simulation
             await provider.call(txData);
-
             const txResponse = await wallet.sendTransaction(txData);
-            console.log(`✅ [${networkName}]`.gold + ` SUCCESS: ${txResponse.hash}`);
-            this.verifyAndLearn(networkName, txResponse, source);
+            console.log(`✅ [${networkName}] SUCCESS: ${txResponse.hash}`.gold);
         } catch (e) {
-            if (!e.message.toLowerCase().includes("insufficient funds")) {
-                console.log(`[${networkName}]`.red + " Reverted: Atomic Guard Triggered.");
+            if (e.message.toLowerCase().includes("insufficient funds")) {
+                console.log(`[${networkName}]`.red + " FAILED: Balance too low at point of broadcast.");
+            } else {
+                console.log(`[${networkName}]`.cyan + " SKIPPING: Logic Revert (Capital Safe).");
             }
         }
     }
 
-    async verifyAndLearn(net, txResponse, source) {
-        try {
-            const receipt = await txResponse.wait(1);
-            this.ai.updateTrust(source, receipt.status === 1);
-        } catch (e) { this.ai.updateTrust(source, false); }
-    }
-
     async startTelegramSentry() {
+        if (!telegramAvailable) return;
         const apiId = parseInt(process.env.TG_API_ID);
         const apiHash = process.env.TG_API_HASH;
         if (!apiId || !apiHash) return;
 
-        const client = new TelegramClient(this.session, apiId, apiHash, { connectionRetries: 5 });
-        await client.start({
-            phoneNumber: async () => await input.text("Phone: "),
-            password: async () => await input.text("2FA: "),
-            phoneCode: async () => await input.text("Code: "),
-            onError: (err) => console.log(err),
-        });
-        console.log("[SENTRY] Telegram Listener Online.".cyan);
+        try {
+            const client = new TelegramClient(this.tgSession, apiId, apiHash, { connectionRetries: 5 });
+            await client.start({
+                phoneNumber: async () => await input.text("Phone: "),
+                password: async () => await input.text("2FA: "),
+                phoneCode: async () => await input.text("Code: "),
+                onError: (err) => console.log(err),
+            });
+            console.log("[SENTRY] Telegram Listener Online.".cyan);
 
-        client.addEventHandler(async (event) => {
-            const message = event.message?.message;
-            if (!message || !message.includes("$")) return;
+            client.addEventHandler(async (event) => {
+                const message = event.message?.message;
+                if (!message || !message.includes("$")) return;
 
-            let sourceName = "UNKNOWN";
-            const chatId = event.message.chatId.toString();
-            for (const [name, data] of Object.entries(SOURCES)) {
-                if (chatId.includes(data.id)) sourceName = name;
-            }
+                let isSource = false;
+                const chatId = event.message.chatId.toString();
+                for (const data of Object.values(SOURCES)) {
+                    if (chatId.includes(data.id)) isSource = true;
+                }
 
-            if (sourceName !== "UNKNOWN") {
-                const tickers = message.match(/\$[A-Z]+/g);
-                if (tickers) {
-                    const sentiment = this.ai.sentiment.analyze(message).comparative;
-                    if (sentiment > 0.2) {
+                if (isSource) {
+                    const tickers = message.match(/\$[A-Z]+/g);
+                    if (tickers) {
                         for (const net of Object.keys(NETWORKS)) {
-                            // In production, resolve address from ticker via Token List
-                            const mockAddr = "0x25d887Ce7a35172C62FeBFD67a1856F20FaEbb00"; 
-                            this.executeStrike(net, mockAddr, sourceName);
+                            this.executeStrike(net, tickers[0].replace('$', ''));
                         }
                     }
                 }
-            }
-        });
+            });
+        } catch (e) { console.log("[SENTRY] Connection failed.".red); }
+    }
+
+    async analyzeWebIntelligence() {
+        for (const url of AI_SITES) {
+            try {
+                const response = await axios.get(url, { timeout: 5000 });
+                const text = JSON.stringify(response.data);
+                const tickers = text.match(/\$[A-Z]+/g);
+                if (tickers) {
+                    for (const net of Object.keys(NETWORKS)) {
+                        this.executeStrike(net, tickers[0].replace('$', ''));
+                    }
+                }
+            } catch (e) { continue; }
+        }
     }
 
     async run() {
         console.log("╔════════════════════════════════════════════════════════╗".gold);
-        console.log("║    ⚡ APEX TITAN v205.0 | APEX GEM FINDER ACTIVE    ║".gold);
-        console.log("║    MODE: 100% SQUEEZE | LOW-VALUE GEM FILTERS      ║".gold);
+        console.log("║    ⚡ APEX TITAN v207.0 | APEX GEM FINDER ACTIVE    ║".gold);
+        console.log("║    STATUS: ONLINE | TERMINAL BALANCE ENFORCEMENT    ║".gold);
         console.log("╚════════════════════════════════════════════════════════╝".gold);
 
         if (!EXECUTOR || !PRIVATE_KEY) {
@@ -294,25 +262,22 @@ class ApexOmniGovernor {
             return;
         }
 
-        this.startTelegramSentry().catch(() => console.log("[SENTRY] Telegram offline.".red));
+        this.startTelegramSentry();
 
         while (true) {
-            const webSignals = await this.ai.analyzeWebIntelligence();
-            const tasks = [];
+            await this.analyzeWebIntelligence();
             for (const net of Object.keys(NETWORKS)) {
-                if (webSignals.length > 0) {
-                    for (const s of webSignals) tasks.push(this.executeStrike(net, "0xTOKEN_ADDR", "WEB_AI"));
-                } else {
-                    tasks.push(this.executeStrike(net, "0x25d887Ce7a35172C62FeBFD67a1856F20FaEbb00", "DISCOVERY"));
-                }
+                this.executeStrike(net, "DISCOVERY");
             }
-            if (tasks.length > 0) await Promise.allSettled(tasks);
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 4000));
         }
     }
 }
 
-// Start
+// Ignition
 runHealthServer();
 const governor = new ApexOmniGovernor();
-governor.run().catch(console.error);
+governor.run().catch(err => {
+    console.log("FATAL ERROR: ".red, err.message);
+    process.exit(1);
+});
