@@ -1,6 +1,6 @@
 /**
  * ===============================================================================
- * APEX PREDATOR v204.9 (JS-UNIFIED - APEX GEM FINDER)
+ * APEX PREDATOR v205.0 (JS-UNIFIED - APEX GEM FINDER)
  * ===============================================================================
  * STATUS: DIRECT TRADING FINALITY (LOW-VALUE GEM FOCUS)
  * CAPABILITIES UNIFIED:
@@ -34,7 +34,7 @@ const runHealthServer = () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             engine: "APEX_TITAN",
-            version: "204.9-JS",
+            version: "205.0-JS",
             mode: "GEM_FINDER",
             keys_detected: !!(process.env.PRIVATE_KEY && process.env.EXECUTOR_ADDRESS),
             filters: "ENABLED (1 ETH > 100k Tokens)"
@@ -105,7 +105,8 @@ class AIEngine {
                 const analysis = this.sentiment.analyze(text);
                 const tickers = text.match(/\$[A-Z]+/g);
                 if (tickers && analysis.comparative > 0.1) {
-                    signals.append({ ticker: tickers[0].replace('$', ''), sentiment: analysis.comparative });
+                    // Fixed: Changed .append to .push for JS
+                    signals.push({ ticker: tickers[0].replace('$', ''), sentiment: analysis.comparative });
                 }
             } catch (e) { continue; }
         }
@@ -211,7 +212,7 @@ class ApexOmniGovernor {
             const txData = await contract.executeTriangle.populateTransaction(
                 NETWORKS[networkName].router,
                 tokenAddr,
-                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC Base (Example)
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Example Pair
                 m.tradeSize,
                 {
                     value: m.tradeSize,
@@ -284,7 +285,7 @@ class ApexOmniGovernor {
 
     async run() {
         console.log("╔════════════════════════════════════════════════════════╗".gold);
-        console.log("║    ⚡ APEX TITAN v204.9 | APEX GEM FINDER ACTIVE    ║".gold);
+        console.log("║    ⚡ APEX TITAN v205.0 | APEX GEM FINDER ACTIVE    ║".gold);
         console.log("║    MODE: 100% SQUEEZE | LOW-VALUE GEM FILTERS      ║".gold);
         console.log("╚════════════════════════════════════════════════════════╝".gold);
 
@@ -313,4 +314,5 @@ class ApexOmniGovernor {
 
 // Start
 runHealthServer();
-new ApexOmniGovernor().run().catch(console.error);
+const governor = new ApexOmniGovernor();
+governor.run().catch(console.error);
